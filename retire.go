@@ -13,28 +13,26 @@ import (
 // Memory (archive) → Lifespan (end).
 //
 // All events are emitted via graph.Record() for bus visibility.
-// Resolves any mid-operation state (Escalating, Refusing) back to Idle
-// before beginning the retirement sequence.
+// Resolves any mid-operation state (Escalating, Refusing, Waiting) back
+// to Idle before beginning the retirement sequence — atomically under
+// a.mu to prevent TOCTOU races.
+//
+// Introspection records the reason directly (no LLM call) to prevent
+// indefinite hangs in the terminal StateRetiring.
 //
 // Transitions: current state → [Idle →] Retiring → Retired.
 func (a *Agent) Retire(ctx context.Context, reason string) error {
-	// Resolve mid-operation states that can't transition directly to Retiring.
-	state := a.State()
-	switch state {
-	case egagent.StateEscalating, egagent.StateRefusing, egagent.StateWaiting:
-		if err := a.transitionTo(egagent.StateIdle); err != nil {
-			return fmt.Errorf("retire: resolve %s: %w", state, err)
-		}
-	case egagent.StateRetired:
-		return fmt.Errorf("retire: agent already retired")
-	}
-
-	if err := a.transitionTo(egagent.StateRetiring); err != nil {
+	if err := a.resolveAndRetire(); err != nil {
 		return fmt.Errorf("retire: %w", err)
 	}
 
-	// Introspect: final self-observation (via graph.Record, not runtime.Introspect).
-	_, _ = a.Introspect(ctx, "Final introspection before retirement: "+reason)
+	// Introspect: record the retirement reason directly. No LLM call —
+	// an unresponsive provider would block the agent in StateRetiring
+	// indefinitely, violating the DIGNITY invariant (graceful shutdown).
+	_, _ = a.recordAndTrack(event.EventTypeAgentIntrospected.Value(), event.AgentIntrospectedContent{
+		AgentID:     a.runtime.ID(),
+		Observation: "Retiring: " + reason,
+	})
 
 	// Communicate: farewell on the "lifecycle" channel.
 	_, _ = a.recordAndTrack(event.EventTypeAgentCommunicated.Value(), event.AgentCommunicatedContent{
@@ -70,4 +68,26 @@ func (a *Agent) Retire(ctx context.Context, reason string) error {
 	}
 
 	return nil
+}
+
+// resolveAndRetire atomically resolves mid-operation states and transitions
+// to StateRetiring. Holds a.mu for the entire sequence to prevent TOCTOU
+// races between state observation and transition.
+func (a *Agent) resolveAndRetire() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.state == egagent.StateRetired {
+		return fmt.Errorf("agent already retired")
+	}
+
+	// Resolve mid-operation states that can't transition directly to Retiring.
+	switch a.state {
+	case egagent.StateEscalating, egagent.StateRefusing, egagent.StateWaiting:
+		if err := a.transitionLocked(egagent.StateIdle); err != nil {
+			return fmt.Errorf("resolve %s: %w", a.state, err)
+		}
+	}
+
+	return a.transitionLocked(egagent.StateRetiring)
 }

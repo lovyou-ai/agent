@@ -10,7 +10,7 @@ import (
 // transitionTo changes the agent's operational state, validating the transition
 // and emitting an agent.state.changed event on the graph.
 //
-// Holds a.mu for the entire operation: state validation, state update,
+// Acquires a.mu for the entire operation: state validation, state update,
 // event recording, and lastEvent update are atomic.
 //
 // Returns an error if the transition is invalid or if the state change
@@ -19,7 +19,12 @@ import (
 func (a *Agent) transitionTo(target egagent.OperationalState) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.transitionLocked(target)
+}
 
+// transitionLocked performs a state transition while a.mu is already held.
+// All callers must hold a.mu. Use transitionTo() when the lock is not held.
+func (a *Agent) transitionLocked(target egagent.OperationalState) error {
 	prev := a.state
 	next, err := a.state.TransitionTo(target)
 	if err != nil {

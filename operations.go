@@ -26,6 +26,8 @@ func (a *Agent) Reason(ctx context.Context, prompt string) (string, error) {
 
 	content := resp.Content()
 
+	// Best-effort observability: the LLM response is the primary output.
+	// Recording failure doesn't invalidate the response.
 	_, _ = a.recordAndTrack(event.EventTypeAgentEvaluated.Value(), event.AgentEvaluatedContent{
 		AgentID:    a.runtime.ID(),
 		Subject:    "reason",
@@ -62,6 +64,7 @@ func (a *Agent) Operate(ctx context.Context, workDir, instruction string) (decis
 		return decision.OperateResult{}, fmt.Errorf("operate: %w", err)
 	}
 
+	// Best-effort observability: the operation result is the primary output.
 	_, _ = a.recordAndTrack(event.EventTypeAgentActed.Value(), event.AgentActedContent{
 		AgentID: a.runtime.ID(),
 		Action:  "operate",
@@ -106,16 +109,14 @@ func (a *Agent) Evaluate(ctx context.Context, subject, prompt string) (string, e
 		return "", fmt.Errorf("evaluate: %w", err)
 	}
 
-	_, err = a.recordAndTrack(event.EventTypeAgentEvaluated.Value(), event.AgentEvaluatedContent{
+	// Best-effort observability: the evaluation result is the primary output.
+	// Don't lose the LLM response if recording fails.
+	_, _ = a.recordAndTrack(event.EventTypeAgentEvaluated.Value(), event.AgentEvaluatedContent{
 		AgentID:    a.runtime.ID(),
 		Subject:    subject,
 		Confidence: resp.Confidence(),
 		Result:     resp.Content(),
 	})
-	if err != nil {
-		_ = a.transitionTo(egagent.StateIdle)
-		return "", fmt.Errorf("evaluate: record: %w", err)
-	}
 
 	if err := a.transitionTo(egagent.StateIdle); err != nil {
 		return resp.Content(), fmt.Errorf("evaluate: transition back: %w", err)
@@ -213,6 +214,7 @@ func (a *Agent) Introspect(ctx context.Context, prompt string) (string, error) {
 		return "", fmt.Errorf("introspect: %w", err)
 	}
 
+	// Best-effort observability: the introspection text is the primary output.
 	_, _ = a.recordAndTrack(event.EventTypeAgentIntrospected.Value(), event.AgentIntrospectedContent{
 		AgentID:     a.runtime.ID(),
 		Observation: resp.Content(),

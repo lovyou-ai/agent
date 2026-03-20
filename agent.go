@@ -185,18 +185,17 @@ func (a *Agent) boot(pk types.PublicKey, cfg Config) error {
 	)
 
 	for _, content := range bootEvents {
-		ev, err := a.record(content.EventTypeName(), content)
+		_, err := a.recordAndTrack(content.EventTypeName(), content)
 		if err != nil {
 			return fmt.Errorf("boot event %s: %w", content.EventTypeName(), err)
 		}
-		a.lastEvent = ev.ID()
 	}
 
 	return nil
 }
 
 // record emits an event through the Graph facade (mutex-safe, bus-integrated).
-// Caller must hold a.mu OR guarantee single-threaded access (e.g. during boot).
+// Caller must hold a.mu. Called by recordAndTrack() and transitionLocked().
 func (a *Agent) record(eventTypeName string, content event.EventContent) (event.Event, error) {
 	eventType := types.MustEventType(eventTypeName)
 
